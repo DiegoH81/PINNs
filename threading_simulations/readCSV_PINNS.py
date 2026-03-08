@@ -1,6 +1,6 @@
 import pandas as pd
 
-df_sir = pd.read_csv("C:\\Users\\diego\\OneDrive\\Escritorio\\Diego\\INVESTIGACION\\PINNs\\threading_simulations\\results_sir.csv")
+df_sir = pd.read_csv("C:\\Users\\diego\\OneDrive\\Escritorio\\Diego\\INVESTIGACION\\PINNs\\threading_simulations\\results_SIR_NEW.csv")
 
 grouped_sir = (
     df_sir
@@ -13,7 +13,8 @@ print(grouped_sir)
 
 #----------------------------<------------------>----------------------------
 
-df_MT = pd.read_csv("C:\\Users\\diego\\OneDrive\\Escritorio\\Diego\\INVESTIGACION\\PINNs\\threading_simulations\\results_mt.csv")
+
+df_MT = pd.read_csv("C:\\Users\\diego\\OneDrive\\Escritorio\\Diego\\INVESTIGACION\\PINNs\\threading_simulations\\results_MT_NEW.csv")
 
 grouped_MT = (
     df_MT
