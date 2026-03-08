@@ -345,7 +345,9 @@ if __name__ == "__main__":
     nCores = cpu_count()//2
     print(f"PC has {nCores} cores")
     
-    args = [(i, "MT", 16, 5.0, 20.0, 25.0) for i in range (100)]
+    modelType = "MT"
+
+    args = [(i, modelType, 16, 5.0, 30.0, 25.0) for i in range (100)]
     with Pool(processes = nCores) as pool:
         final_results = pool.starmap(worker, args)
 
@@ -354,14 +356,25 @@ if __name__ == "__main__":
     df = pd.DataFrame(flat_results)
     print(df)
     print("\n\n\n\n\n")
-    summary = df.groupby("balanced").agg({
-        "error 1": "mean",
-        "error 2": "mean",
-        "error 3": "mean",
-        "error TOTAL": "mean",
-        "alpha": "mean",
-        "lambda": "mean",
-        "time": "mean"
-    }).reset_index()
+    if (modelType == "SIR"):
+        summary = df.groupby("balanced").agg({
+            "error 1": "mean",
+            "error 2": "mean",
+            "error 3": "mean",
+            "error TOTAL": "mean",
+            "beta": "mean",
+            "gamma": "mean",
+            "time": "mean"
+        }).reset_index()
+    elif (modelType == "MT"):
+        summary = df.groupby("balanced").agg({
+            "error 1": "mean",
+            "error 2": "mean",
+            "error 3": "mean",
+            "error TOTAL": "mean",
+            "alpha": "mean",
+            "lambda": "mean",
+            "time": "mean"
+        }).reset_index()
 
     print(summary.round(6))
