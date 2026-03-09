@@ -49,57 +49,34 @@ def rk4(f, y0, t, beta, gamma):
 
     return y
 
-class sir_nn(nn.Module):
-    def __init__(self, tTrain):
-        super().__init__()
+class general_nn(nn.Module):
+  def __init__(self, time):
+    super().__init__()
 
-        self.net = nn.Sequential(
-                nn.Linear(1, 32),
-                nn.Tanh(),
-                nn.Linear(32, 32),
-                nn.Tanh(),
-                nn.Linear(32, 32),
-                nn.Tanh(),
-                nn.Linear(32, 3))
+    self.net = nn.Sequential(
+               nn.Linear(1, 32),
+               nn.Tanh(),
+               nn.Linear(32, 32),
+               nn.Tanh(),
+               nn.Linear(32, 32),
+               nn.Tanh(),
+               nn.Linear(32, 3))
 
-        self.beta = nn.Parameter(torch.tensor([0.5]))
-        self.gamma = nn.Parameter(torch.tensor([0.5]))
+    self.lam = nn.Parameter(torch.tensor([0.5]))
+    self.delta = nn.Parameter(torch.tensor([0.5]))
+    self.alpha = nn.Parameter(torch.tensor([0.5]))
 
-        self.tMax = max(tTrain)
+    self.tMax = max(time)
 
-    def forward(self, t):
-        t_norm = t / self.tMax
-        return nn.Softplus()(self.net(t_norm))
-
-class MT_nn(nn.Module):
-    def __init__(self, tTrain):
-        super().__init__()
-
-        self.net = nn.Sequential(
-                nn.Linear(1, 32),
-                nn.Tanh(),
-                nn.Linear(32, 32),
-                nn.Tanh(),
-                nn.Linear(32, 32),
-                nn.Tanh(),
-                nn.Linear(32, 3))
-
-        self.lambd = nn.Parameter(torch.tensor([0.5]))
-        self.alpha = nn.Parameter(torch.tensor([0.5]))
-
-        self.tMax = max(tTrain)
-
-
-    def forward(self, t):
-        t_norm = t / self.tMax
-        return nn.Softplus()(self.net(t_norm))
+  def forward(self, t):
+    t_norm = t / self.tMax
+    return nn.Softplus()(self.net(t_norm))
 
 # NN Simulation
 def train(t_real, sol_noisy, nColloc, y_0, hasWeights, modelType, idHPoints):
-    if(modelType == "SIR"):
-        model = sir_nn(t_real)
-    elif (modelType == "MT"):
-        model = MT_nn(t_real)
+    
+    model = general_nn(t_real)
+    
     # Optimizer
     optimizer = optim.Adam(model.parameters(), lr)
     
@@ -134,26 +111,19 @@ def train(t_real, sol_noisy, nColloc, y_0, hasWeights, modelType, idHPoints):
         lossIC = torch.mean((model(_0_0Tensor) - y_0_t)**2)
 
         # Loss EDO
-        if (modelType == "SIR"):
-            ds_dt = torch.autograd.grad(X, tColloc, grad_outputs= torch.ones_like(X), create_graph= True)[0]
-            di_dt = torch.autograd.grad(Y, tColloc, grad_outputs= torch.ones_like(Y), create_graph= True)[0]
-            dr_dt = torch.autograd.grad(Z, tColloc, grad_outputs= torch.ones_like(Z), create_graph= True)[0]
-        
-            diff_s = ds_dt + model.beta * X * Y
-            diff_i = di_dt - model.beta * X * Y + model.gamma * Y
-            diff_r = dr_dt -  model.gamma * Y
+        dx_dt = torch.autograd.grad(X, tColloc, grad_outputs= torch.ones_like(X), create_graph= True)[0]
+        dy_dt = torch.autograd.grad(Y, tColloc, grad_outputs= torch.ones_like(Y), create_graph= True)[0]
+        dz_dt = torch.autograd.grad(Z, tColloc, grad_outputs= torch.ones_like(Z), create_graph= True)[0]
 
-            lossEDO = torch.mean(diff_s**2 + diff_i**2 + diff_r**2)
-        elif (modelType == "MT"):
-            dx_dt = torch.autograd.grad(X, tColloc, grad_outputs= torch.ones_like(X), create_graph= True)[0]
-            dy_dt = torch.autograd.grad(Y, tColloc, grad_outputs= torch.ones_like(Y), create_graph= True)[0]
-            dz_dt = torch.autograd.grad(Z, tColloc, grad_outputs= torch.ones_like(Z), create_graph= True)[0]
-        
-            diff_x = dx_dt + model.lambd * X * Y
-            diff_y = dy_dt - model.lambd * X * Y + model.alpha * Y * (1 - X)
-            diff_z = dz_dt - model.alpha * Y * (1 - X)
-        
-            lossEDO = torch.mean(diff_x**2 + diff_y**2 + diff_z**2)
+        lam =model.lam# torch.abs(model.lam)
+        delta = model.delta#torch.abs(model.delta)
+        alpha = model.alpha#torch.abs(model.alpha)
+
+        diff_x = dx_dt + lam * X * Y
+        diff_y = dy_dt - lam * X * Y + delta * Y + alpha*Y*(1-X)
+        diff_z = dz_dt - delta * Y - alpha* Y *(1-X)
+        lossEDO = torch.mean(diff_x**2 + diff_y**2 + diff_z**2)
+
 
         # Loss Data
         tmpData = model(t_h)
@@ -241,30 +211,20 @@ def worker(scenarioId, modelType, nPoints, nNoise, outliersPerc, outliersNoisePe
     #plt.plot(t_plot, predBalanced[:, 1], label ="Balanced")
     #plt.scatter(t_plot[idHPoints], solNoisy[idHPoints, 1], color = "red", label = "Noisy Data")
     
-    if (modelType == "MT"):
-        results.append({"points": nPoints,
-                    "balanced": "yes",
-                    "noise": nNoise,
-                    "error 1" : errorS,
-                    "error 2" : errorI,
-                    "error 3" : errorR,
-                    "error TOTAL": errorTotal,
-                    "time": trainingTime,
-                    "alpha": modelBalanced.alpha.item(),
-                    "lambda": modelBalanced.lambd.item(),
-                    })
-    elif (modelType == "SIR"):
-        results.append({"points": nPoints,
-                        "balanced": "yes",
-                        "noise": nNoise,
-                        "error 1" : errorS,
-                        "error 2" : errorI,
-                        "error 3" : errorR,
-                        "error TOTAL": errorTotal,
-                        "time": trainingTime,
-                        "beta": modelBalanced.beta.item(),
-                        "gamma": modelBalanced.gamma.item(),
-                        })
+    
+    results.append({"points": nPoints,
+                "balanced": "yes",
+                "noise": nNoise,
+                "error 1" : errorS,
+                "error 2" : errorI,
+                "error 3" : errorR,
+                "error TOTAL": errorTotal,
+                "time": trainingTime,
+                "lambda": modelBalanced.lam.item(),
+                "delta": modelBalanced.delta.item(),
+                "alpha": modelBalanced.alpha.item(),
+                })
+    
     
     del(modelBalanced)
     
@@ -276,30 +236,20 @@ def worker(scenarioId, modelType, nPoints, nNoise, outliersPerc, outliersNoisePe
     errorR = np.sqrt(np.mean((predUnbalanced[:, 2] - sol[:, 2])**2))
     errorTotal = np.sqrt(np.mean((predUnbalanced[:, 0] - sol[:, 0])**2 + (predUnbalanced[:, 1] - sol[:, 1])**2 + (predUnbalanced[:, 2] - sol[:, 2])**2))
 
-    if (modelType == "MT"):
-        results.append({"points": nPoints,
-                        "balanced": "no",
-                        "noise": nNoise,
-                        "error 1" : errorS,
-                        "error 2" : errorI,
-                        "error 3" : errorR,
-                        "error TOTAL": errorTotal,
-                        "time": trainingTime,
-                        "alpha": modelUnbalanced.alpha.item(),
-                        "lambda": modelUnbalanced.lambd.item(),
-                        })
-    elif (modelType == "SIR"):
-        results.append({"points": nPoints,
-                        "balanced": "no",
-                        "noise": nNoise,
-                        "error 1" : errorS,
-                        "error 2" : errorI,
-                        "error 3" : errorR,
-                        "error TOTAL": errorTotal,
-                        "time": trainingTime,
-                        "beta": modelUnbalanced.beta.item(),
-                        "gamma": modelUnbalanced.gamma.item(),
-                        })
+    
+    results.append({"points": nPoints,
+                    "balanced": "no",
+                    "noise": nNoise,
+                    "error 1" : errorS,
+                    "error 2" : errorI,
+                    "error 3" : errorR,
+                    "error TOTAL": errorTotal,
+                    "time": trainingTime,
+                    "lambda": modelUnbalanced.lam.item(),
+                    "delta": modelUnbalanced.delta.item(),
+                    "alpha": modelUnbalanced.alpha.item(),
+                    })
+    
     
 
     del(modelUnbalanced)
@@ -326,7 +276,7 @@ s_0, i_0, r_0 = 0.95, 0.05, 0.0
 y_0 = np.array([s_0, i_0, r_0])
 
 # N Epocas
-n_ephocs = 10000
+n_ephocs = 20000
 
 # Beta & gamma
 beta = 0.8
@@ -347,7 +297,7 @@ if __name__ == "__main__":
     
     modelType = "MT"
 
-    args = [(i, modelType, 16, 5.0, 30.0, 25.0) for i in range (100)]
+    args = [(i, modelType, 16, 5.0, 30.0, 25.0) for i in range (20)]
     with Pool(processes = nCores) as pool:
         final_results = pool.starmap(worker, args)
 
@@ -356,25 +306,18 @@ if __name__ == "__main__":
     df = pd.DataFrame(flat_results)
     print(df)
     print("\n\n\n\n\n")
-    if (modelType == "SIR"):
-        summary = df.groupby("balanced").agg({
-            "error 1": "mean",
-            "error 2": "mean",
-            "error 3": "mean",
-            "error TOTAL": "mean",
-            "beta": "mean",
-            "gamma": "mean",
-            "time": "mean"
-        }).reset_index()
-    elif (modelType == "MT"):
-        summary = df.groupby("balanced").agg({
-            "error 1": "mean",
-            "error 2": "mean",
-            "error 3": "mean",
-            "error TOTAL": "mean",
-            "alpha": "mean",
-            "lambda": "mean",
-            "time": "mean"
-        }).reset_index()
+    
+    summary = df.groupby("balanced").agg({
+        "error 1": "mean",
+        "error 2": "mean",
+        "error 3": "mean",
+        "error TOTAL": "mean",
+        "lambda": "mean",
+        "delta": "mean",
+        "alpha": "mean",
+        "time": "mean"
+        
+    }).reset_index()
+    
 
     print(summary.round(6))

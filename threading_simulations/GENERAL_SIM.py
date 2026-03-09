@@ -22,6 +22,15 @@ def SIR(t, y, beta, gamma):
     dRdt = gamma * I
     return np.array([dSdt, dIdt, dRdt])
 
+def maki_thompson(t, y, lambd, alpha):
+    X = y[0]
+    Y = y[1]
+    Z = y[2]
+    dX = -lambd * X * Y
+    dY =  lambd * X * Y - alpha * Y * (1 - X)
+    dZ =  alpha * Y * (1 - X)
+    return np.array([dX, dY, dZ])
+
 def rk4(f, y0, t, beta, gamma):
     n = len(t)
     y0 = np.array(y0)
@@ -40,46 +49,47 @@ def rk4(f, y0, t, beta, gamma):
 
     return y
 
-class sir_nn(nn.Module):
-    def __init__(self):
-        super().__init__()
 
-        self.net = nn.Sequential(
-                nn.Linear(1, 32),
-                nn.Tanh(),
-                nn.Linear(32, 32),
-                nn.Tanh(),
-                nn.Linear(32, 32),
-                nn.Tanh(),
-                nn.Linear(32, 3))
+class general_nn(nn.Module):
+  def __init__(self, time):
+    super().__init__()
 
-        self.beta = nn.Parameter(torch.tensor([0.5]))
-        self.gamma = nn.Parameter(torch.tensor([0.5]))
+    self.net = nn.Sequential(
+               nn.Linear(1, 32),
+               nn.Tanh(),
+               nn.Linear(32, 32),
+               nn.Tanh(),
+               nn.Linear(32, 32),
+               nn.Tanh(),
+               nn.Linear(32, 3))
 
-    def forward(self, t):
-        t_norm = t/40.0
-        return nn.Softplus()(self.net(t_norm))
-  
+    self.lam = nn.Parameter(torch.tensor([0.5]))
+    self.delta = nn.Parameter(torch.tensor([0.5]))
+    self.alpha = nn.Parameter(torch.tensor([0.5]))
+
+    self.tMax = max(time)
+
+  def forward(self, t):
+    t_norm = t / self.tMax
+    return nn.Softplus()(self.net(t_norm))
+
 # NN Simulation
-def train(nHelperPoints, t_real, sol_noisy, nColloc, y_0, beta, gamma, hasWeights):
-    model = sir_nn()
+def train(t_real, sol_noisy, nColloc, y_0, hasWeights, modelType, idHPoints):
+    
+    model = general_nn(t_real)
     # Optimizer
     optimizer = optim.Adam(model.parameters(), lr)
     
     # Weights
-    ic_weight = 10.0
+    ic_weight = 5.0
     edo_weight = 40.0
     data_weight = 0.9
     sum_weight = 1.0
-    
+    choice_weight = 0.1
+
     # Helper points
-    h_points = []
-    id_h_points = []
-    
-    id_h_points = np.linspace(0, n_points - 1, nHelperPoints, dtype = int)
-    h_points = t_real[id_h_points].detach().numpy()
-    t_h = t_real[id_h_points].clone().detach()
-    solH = torch.tensor(sol_noisy[id_h_points])
+    t_h = t_real[idHPoints].clone().detach()
+    solH = torch.tensor(sol_noisy[idHPoints])
     
     
     # tColloc
@@ -90,72 +100,56 @@ def train(nHelperPoints, t_real, sol_noisy, nColloc, y_0, beta, gamma, hasWeight
     
     # y0 tensor
     y_0_t = torch.tensor(y_0)
-
-    # Stop limit
-    bestLoss = float('inf')
-    minEpochs = 2000
-    checkEpochs = 200
-    patienceCounter = 0
-    patienceLimit = 500
     
     # Training loop
     startTime = time.perf_counter()
     for epoch in range(n_ephocs):
 
         pred = model(tColloc)
-        S, I, R = pred[:, 0:1], pred[:, 1:2], pred[:, 2:3]
+        X, Y, Z = pred[:, 0:1], pred[:, 1:2], pred[:, 2:3]
         
         # Loss IC
         lossIC = torch.mean((model(_0_0Tensor) - y_0_t)**2)
 
         # Loss EDO
-        ds_dt = torch.autograd.grad(S, tColloc, grad_outputs= torch.ones_like(S), create_graph= True)[0]
-        di_dt = torch.autograd.grad(I, tColloc, grad_outputs= torch.ones_like(I), create_graph= True)[0]
-        dr_dt = torch.autograd.grad(R, tColloc, grad_outputs= torch.ones_like(R), create_graph= True)[0]
-    
-        diff_s = ds_dt + model.beta * S * I
-        diff_i = di_dt - model.beta * S * I + model.gamma * I
-        diff_r = dr_dt -  model.gamma * I
-    
-        lossEDO = torch.mean(diff_s**2 + diff_i**2 + diff_r**2)
+        dx_dt = torch.autograd.grad(X, tColloc, grad_outputs= torch.ones_like(X), create_graph= True)[0]
+        dy_dt = torch.autograd.grad(Y, tColloc, grad_outputs= torch.ones_like(Y), create_graph= True)[0]
+        dz_dt = torch.autograd.grad(Z, tColloc, grad_outputs= torch.ones_like(Z), create_graph= True)[0]
 
+        lam =model.lam# torch.abs(model.lam)
+        delta = model.delta#torch.abs(model.delta)
+        alpha = model.alpha#torch.abs(model.alpha)
+
+        diff_x = dx_dt + lam * X * Y
+        diff_y = dy_dt - lam * X * Y + delta * Y + alpha*Y*(1-X)
+        diff_z = dz_dt - delta * Y - alpha* Y *(1-X)
+        lossEDO = torch.mean(diff_x**2 + diff_y**2 + diff_z**2)
+        
         # Loss Data
         tmpData = model(t_h)
         lossData = torch.mean((tmpData - solH)**2)
-        
+
+
+        # Balance
+        #lossChoice = torch.abs(model.delta)  + torch.abs(model.alpha)
+
         # Loss SUM_1
-        lossSUM_1 = torch.mean((1.0 - S - I - R)**2)
+        lossSUM_1 = torch.mean((1.0 - X - Y - Z)**2)
 
         if (hasWeights == True):
-            loss = (ic_weight * lossIC + edo_weight * lossEDO + data_weight * lossData + sum_weight * lossSUM_1)
+            loss = (ic_weight * lossIC + edo_weight * lossEDO + data_weight * lossData + sum_weight * lossSUM_1)# + choice_weight * lossChoice)
         else:
-            loss = lossIC + lossEDO + lossData + lossSUM_1
+            loss = lossIC + lossEDO + lossData + lossSUM_1# + lossChoice
     
         optimizer.zero_grad()
         loss.backward()
         optimizer.step()
 
-        #if (epoch % 500 == 0):
-        #  print (epoch)
-
-        if (epoch % checkEpochs == 0 and epoch >= minEpochs):
-            lossValue = loss.item()
-
-            if (lossValue < bestLoss):
-                bestLoss = lossValue
-                patienceCounter = 0
-            else:
-                patienceCounter += checkEpochs
-
-            
-            if (patienceCounter >= patienceLimit):
-                #print(f"Stopping at epoch {epoch}")
-                break
         
     endTime = time.perf_counter()
-    return model, endTime - startTime, id_h_points
+    return model, endTime - startTime, idHPoints
 
-def getNoiseBase():
+def getNoiseBase(sol):
     noiseBase = []
     noiseBase.append(np.random.uniform(0.7, 1.0, size=sol.shape[0])) # S
     noiseBase.append(np.random.uniform(0.7, 1.0, size=sol.shape[0])) # I
@@ -181,19 +175,24 @@ def getNoisySolution(solution, noiseBase, noiseSign, percentage):
     return solNoisy
 
 # Process
-def worker(scenarioId, nPoints, noiseLevels):
+def worker(scenarioId, modelType, nPoints, nNoise):
     print(f"Scenario {scenarioId}")
     np.random.seed(scenarioId)
     torch.manual_seed(scenarioId)
 
     results = []
-    noiseBase, noiseSign = getNoiseBase()
-    for noise in noiseLevels:
-        #print(f"\tTraining with noise {noise}")
+    if (modelType == "SIR"):
+        sol = solSir
+    elif (modelType == "MT"):
+        sol = solMT
+    noiseBase, noiseSign = getNoiseBase(sol)
+
+    for noise in nNoise:
         solNoisy = getNoisySolution(sol, noiseBase, noiseSign, noise)
         for point in nPoints:
-            #print(f"Training with point {point}")
-            modelBalanced, trainingTime, idHPoints = train(point, t_real, solNoisy, 50, y_0, beta, gamma, True)
+            id_h_points = np.linspace(0, n_points - 1 , point, dtype = int)
+
+            modelBalanced, trainingTime, idHPoints = train(t_real, solNoisy, 50, y_0, True, modelType, id_h_points)
 
             predBalanced = modelBalanced(t_real).detach().numpy()
             errorS = np.sqrt(np.mean((predBalanced[:, 0] - sol[:, 0])**2))
@@ -202,25 +201,29 @@ def worker(scenarioId, nPoints, noiseLevels):
             errorTotal = np.sqrt(np.mean((predBalanced[:, 0] - sol[:, 0])**2 + (predBalanced[:, 1] - sol[:, 1])**2 + (predBalanced[:, 2] - sol[:, 2])**2))
 
             t_plot = t_real.detach().numpy()
-            
+
+            #plt.plot(t_plot, sol[:, 1], label = "Real")
+            #plt.plot(t_plot, predBalanced[:, 1], label ="Balanced")
+            #plt.scatter(t_plot[idHPoints], solNoisy[idHPoints, 1], color = "red", label = "Noisy Data")
 
 
             results.append({"points": point,
-                            "balanced": "yes",
                             "noise": noise,
-                            "error S" : errorS,
-                            "error I" : errorI,
-                            "error R" : errorR,
-                            "error TOTAL": errorTotal,
-                            "time": trainingTime,
-                            "beta": modelBalanced.beta.item(),
-                            "gamma": modelBalanced.gamma.item(),
-                            })
-            
-            del(modelBalanced)
-            
+                        "balanced": "yes",
+                        "error 1" : errorS,
+                        "error 2" : errorI,
+                        "error 3" : errorR,
+                        "error TOTAL": errorTotal,
+                        "time": trainingTime,
+                        "lambda": modelBalanced.lam.item(),
+                        "alpha": modelBalanced.alpha.item(),
+                        "delta": modelBalanced.delta.item()
+                        })
 
-            modelUnbalanced, trainingTime, idHPoints = train(point, t_real, solNoisy, 50, y_0, beta, gamma, False)
+            del(modelBalanced)
+
+
+            modelUnbalanced, trainingTime, idHPoints = train(t_real, solNoisy, 50, y_0, False, modelType, id_h_points)
             predUnbalanced = modelUnbalanced(t_real).detach().numpy()
             errorS = np.sqrt(np.mean((predUnbalanced[:, 0] - sol[:, 0])**2))
             errorI = np.sqrt(np.mean((predUnbalanced[:, 1] - sol[:, 1])**2))
@@ -228,17 +231,19 @@ def worker(scenarioId, nPoints, noiseLevels):
             errorTotal = np.sqrt(np.mean((predUnbalanced[:, 0] - sol[:, 0])**2 + (predUnbalanced[:, 1] - sol[:, 1])**2 + (predUnbalanced[:, 2] - sol[:, 2])**2))
 
             results.append({"points": point,
-                            "balanced": "no",
                             "noise": noise,
-                            "error S" : errorS,
-                            "error I" : errorI,
-                            "error R" : errorR,
-                            "error TOTAL": errorTotal,
-                            "time": trainingTime,
-                            "beta": modelUnbalanced.beta.item(),
-                            "gamma": modelUnbalanced.gamma.item(),
-                            })
-            
+                        "balanced": "no",
+                        "error 1" : errorS,
+                        "error 2" : errorI,
+                        "error 3" : errorR,
+                        "error TOTAL": errorTotal,
+                        "time": trainingTime,
+                        "lambda": modelUnbalanced.lam.item(),
+                        "alpha": modelUnbalanced.alpha.item(),
+                        "delta": modelUnbalanced.delta.item()
+                        })
+
+
             del(modelUnbalanced)
 
     
@@ -255,7 +260,7 @@ s_0, i_0, r_0 = 0.95, 0.05, 0.0
 y_0 = np.array([s_0, i_0, r_0])
 
 # N Epocas
-n_ephocs = 10000
+n_ephocs = 13000
 
 # Beta & gamma
 beta = 0.8
@@ -263,21 +268,25 @@ gamma = 0.05
 
 
 # Real RK4 Solution
-sol = rk4(SIR, y_0, t_real.detach().numpy(), beta, gamma);
+solSir = rk4(SIR, y_0, t_real.detach().numpy(), beta, gamma)
+solMT = rk4(maki_thompson, y_0, t_real.detach().numpy(), beta, gamma)
 # Learning Rate
 lr = 1e-3
 
 
 if __name__ == "__main__":
-
     nCores = cpu_count()//2
-    print(nCores)
-    nPoints = [2, 4, 8]
-    noiseLevels = [0.0, 2.5, 5.0]
+    print(f"PC has {nCores} cores")
     
+    nPoints = [3, 5, 9]
+    #nPoints = [9]
+    noiseLevels = [0.0, 2.5, 5.0]
+    #noiseLevels = [5.0]
+
+    modelType = "MT"
     for j in range (10):
         start = j * 10
-        args = [ (start + i, nPoints, noiseLevels) for i in range(10) ]
+        args = [ (start + i, modelType, nPoints, noiseLevels) for i in range(10) ]
 
         with Pool(processes = nCores) as pool:
             all_results = pool.starmap(worker, args)
@@ -285,5 +294,5 @@ if __name__ == "__main__":
         flat_results = [ r for scenario in all_results for r in scenario ]
         df = pd.DataFrame(flat_results)
         print(df)
-        fileName = f"results_{j}_NO_R0.csv" 
+        fileName = f"results_{modelType}_{j}.csv" 
         df.to_csv(fileName, index = False)
